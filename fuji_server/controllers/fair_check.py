@@ -278,7 +278,10 @@ class FAIRCheck:
                         c['size'] = self.metadata_merged.get('object_size')
                     # clean mime types in case these are in URI form:
                     if c.get('type'):
-                        mime_parts = c.get('type').split('/')
+                        if isinstance(c['type'], list):
+                            c['type'] = c['type'][0]
+                            self.metadata_merged['object_content_identifier'][oi]['type'] = c['type'][0]
+                        mime_parts = str(c.get('type')).split('/')
                         if len(mime_parts) > 2:
                             if mime_parts[-2] in ['application','audio','font','example','image','message','model','multipart','text','video']:
                                 self.metadata_merged['object_content_identifier'][oi]['type'] = str(mime_parts[-2])+'/'+str(mime_parts[-1])
@@ -665,24 +668,30 @@ class FAIRCheck:
         # in case object landing page URL ends with '.html' or '/html'
         # try to find out if there is some xml content if suffix is replaced by 'xml
         datalink = None
+        guessed_link = None
         if self.landing_url is not None:
             suff_res = re.search(r'.*[\.\/](html?)?$', self.landing_url)
             if suff_res is not None:
                 if suff_res[1] is not None:
                     guessed_link = self.landing_url.replace(suff_res[1], 'xml')
-                    try:
-                        response = urllib.urlopen(guessed_link)
-                        if response.getheader('Content-Type') in ['text/xml', 'application/rdf+xml']:
-                            datalink = {
-                                'source': 'guessed',
-                                'url': guessed_link,
-                                'type': response.getheader('Content-Type'),
-                                'rel': 'alternate'
-                            }
-                            self.logger.log(self.LOG_SUCCESS, 'FsF-F2-01M : Found XML content at -: ' + guessed_link)
-                        response.close()
-                    except:
-                        self.logger.info('FsF-F2-01M : Guessed XML retrieval failed for -: ' + guessed_link)
+            else:
+                guessed_link = self.landing_url+'.xml'
+            if guessed_link:
+                try:
+                    req = urllib.Request(guessed_link, method="HEAD")
+                    response = urllib.urlopen(req)
+                    content_type = str(response.getheader('Content-Type')).split(';')[0]
+                    if content_type.strip() in ['application/xml','text/xml', 'application/rdf+xml']:
+                        datalink = {
+                            'source': 'guessed',
+                            'url': guessed_link,
+                            'type': content_type,
+                            'rel': 'alternate'
+                        }
+                        self.logger.log(self.LOG_SUCCESS, 'FsF-F2-01M : Found XML content at -: ' + guessed_link)
+                    response.close()
+                except:
+                    self.logger.info('FsF-F2-01M : Guessed XML retrieval failed for -: ' + guessed_link)
         return datalink
 
     def retrieve_metadata_external(self):
