@@ -45,6 +45,7 @@ class MetaDataCollectorOpenGraph(MetaDataCollector):
         dict
             a dictionary of Open Graph metadata
         """
+        self.content_type = 'text/html'
         og_metadata = {}
         ext_meta = None
         if self.source_metadata:
@@ -60,6 +61,6 @@ class MetaDataCollectorOpenGraph(MetaDataCollector):
                 self.namespaces.append('http://ogp.me/ns#')
             #else:
             #    self.logger.info('FsF-F2-01M : Non-metadata OpenGraph properties -:'+str(ext_meta))
-            self.logger.info('FsF-F2-01M : Could not identify OpenGraph metadata')
+            #self.logger.info('FsF-F2-01M : Could not identify OpenGraph metadata')
 
         return self.source_name, og_metadata

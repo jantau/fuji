@@ -68,6 +68,7 @@ class MetaDataCollectorOreAtom(MetaDataCollector):
         dict
             a dictionary of ORE Atom metadata
         """
+        self.content_type = 'application/atom+xml'
         ore_metadata = {}
         if self.target_url:
             self.source_name = self.getEnumSourceNames().OAI_ORE.value
@@ -100,7 +101,7 @@ class MetaDataCollectorOreAtom(MetaDataCollector):
                                         })
             except Exception as err:
                 #print(err.with_traceback())
-                self.logger.info('FsF-F2-01M : Failed to parse OAI ORE XML -: {}'.format(err))
+                self.logger.warning('FsF-F2-01M : Failed to parse OAI ORE XML -: {}'.format(err))
         else:
             self.logger.info('FsF-F2-01M : Could not identify OAI ORE metadata')
 

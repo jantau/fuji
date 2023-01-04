@@ -22,6 +22,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 import io
+import re
 import sys
 import urllib
 from fuji_server.evaluators.fair_evaluator import FAIREvaluator
@@ -56,7 +57,7 @@ class FAIREvaluatorDataContentMetadata(FAIREvaluator):
         score = 0
 
         self.logger.info('FsF-R1-01MD : Object landing page accessible status -: {}'.format(
-            self.fuji.isMetadataAccessible))
+            self.fuji.isLandingPageAccessible))
 
         # 1. check resource type #TODO: resource type collection might be classified as 'dataset'
         # http://doi.org/10.1007/s10531-013-0468-6
@@ -105,7 +106,14 @@ class FAIREvaluatorDataContentMetadata(FAIREvaluator):
                     start = time.time()
                     #r = requests.get(test_data_content_url, verify=False, stream=True)
                     try:
-                        response = urllib.request.urlopen(test_data_content_url)
+                        request_headers = {
+                            'Accept': '*/*',
+                            'User-Agent': 'F-UJI'}
+                        if self.fuji.auth_token:
+                            request_headers['Authorization'] = self.fuji.auth_token_type+' '+self.fuji.auth_token
+                        request = urllib.request.Request(test_data_content_url, headers=request_headers)
+                        response = urllib.request.urlopen(request, timeout=10)
+
                         content_type = response.info().get_content_type()
                         header_content_types = response.headers.get('content-type')
                         chunksize = 1024
@@ -134,14 +142,27 @@ class FAIREvaluatorDataContentMetadata(FAIREvaluator):
                         self.logger.warning(
                             'FsF-R1-01MD : Content identifier inaccessible -: {0}, HTTPError code {1} '.format(
                                 test_data_content_url, e.code))
+                        self.logger.warning(
+                            'FsF-R1.3-02D : Content identifier inaccessible -: {0}, HTTPError code {1} '.format(
+                                test_data_content_url, e.code))
                     except urllib.error.URLError as e:
                         self.logger.exception(e.reason)
+                        self.logger.warning('FsF-F3-01M : Content identifier inaccessible -: {0}, URLError reason {1} '.format(
+                                test_data_content_url, e.reason))
+                        self.logger.warning('FsF-R1-01MD : Content identifier inaccessible -: {0}, URLError reason {1} '.format(
+                                test_data_content_url, e.reason))
+                        self.logger.warning('FsF-R1.3-02D : Content identifier inaccessible -: {0}, URLError reason {1} '.format(
+                                test_data_content_url, e.reason))
+
                     except Exception as e:
-                        self.logger.warning('FsF-F3-01M : Could not access the resource -:' + str(e))
+                        self.logger.warning('FsF-F3-01M : Content identifier inaccessible -:' + str(e))
+                        self.logger.warning('FsF-R1-01MD : Content identifier inaccessible -:' + str(e))
+                        self.logger.warning('FsF-R1.3-02D : Content identifier inaccessible -:' + str(e))
 
 
                     status = 'tika error'
                     parsed_content = ''
+                    tika_content_types = ''
                     try:
                         if len(file_buffer_object.getvalue()) > 0:
                             parsedFile = parser.from_buffer(file_buffer_object.getvalue())
@@ -213,16 +234,19 @@ class FAIREvaluatorDataContentMetadata(FAIREvaluator):
 
                     #if data_object.get('header_content_type') == data_object.get('type'):
                     # TODO: variation of mime type (text/tsv vs text/tab-separated-values)
+                    self.fuji.tika_content_types_list = self.fuji.extend_mime_type_list(self.fuji.tika_content_types_list)
+
                     if d == 'type':
-                        if data_object.get('type') in self.fuji.tika_content_types_list:
-                            matches_content = True
-                            matches_type = True
-                        else:
-                            self.logger.warning(
-                                '{0} : Could not verify content type from downloaded file -: (expected: {1}, found: {2})'
-                                .format(self.metric_identifier, data_object.get('type'),
-                                        str(self.fuji.tika_content_types_list)))
-                            self.fuji.tika_content_types_list.append('unverified')
+                        if data_object.get('type'):
+                            if data_object.get('type') in self.fuji.tika_content_types_list:
+                                matches_content = True
+                                matches_type = True
+                            else:
+                                self.logger.warning(
+                                    '{0} : Could not verify content type from downloaded file -: (expected: {1}, found: {2})'
+                                    .format(self.metric_identifier, data_object.get('type'),
+                                            str(self.fuji.tika_content_types_list)))
+                                self.fuji.tika_content_types_list.append('unverified')
                     elif d == 'size':
                         if tika_content_size == 0:
                             self.logger.warning(
@@ -230,15 +254,16 @@ class FAIREvaluatorDataContentMetadata(FAIREvaluator):
                                     self.metric_identifier))
                         else:
                             try:
-                                object_size = int(float(data_object.get('size')))
-                                if object_size == tika_content_size:
-                                    matches_content = True
-                                    matches_size = True
-                                else:
-                                    self.logger.warning(
-                                        '{0} : Could not verify content size from downloaded file -: (expected: {1}, found: {2})'
-                                        .format(self.metric_identifier, str(data_object.get('size')),
-                                                str(tika_content_size)))
+                                if data_object.get('size'):
+                                    object_size = int(float(data_object.get('size')))
+                                    if object_size == int(float(tika_content_size)):
+                                        matches_content = True
+                                        matches_size = True
+                                    else:
+                                        self.logger.warning(
+                                            '{0} : Could not verify content size from downloaded file -: (expected: {1}, found: {2})'
+                                            .format(self.metric_identifier, str(data_object.get('size')),
+                                                    str(tika_content_size)))
 
                             except Exception as e:
                                 self.logger.warning(

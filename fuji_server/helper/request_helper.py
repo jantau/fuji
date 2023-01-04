@@ -43,6 +43,19 @@ from tika import parser
 
 from fuji_server.helper.preprocessor import Preprocessor
 
+
+class FUJIHTTPRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def __init__(self):
+        super().__init__()
+        self.redirect_list = []
+        self.redirect_url = None
+        self.redirect_status_list = []
+    def redirect_request(self, req, fp, code, msg, hdrs, newurl):
+        self.redirect_url = newurl
+        self.redirect_list.append(newurl)
+        self.redirect_status_list.append((newurl,code))
+        return super().redirect_request(req, fp, code, msg, hdrs, newurl)
+
 class AcceptTypes(Enum):
     #TODO: this seems to be quite error prone..
     datacite_json = 'application/vnd.datacite.datacite+json'
@@ -51,6 +64,7 @@ class AcceptTypes(Enum):
     html = 'text/html, application/xhtml+xml'
     html_xml = 'text/html, application/xhtml+xml, application/xml;q=0.5, text/xml;q=0.5, application/rdf+xml;q=0.5'
     xml = 'application/xml, text/xml;q=0.5'
+    linkset = 'application/linkset+json, application/json, application/linkset'
     json = 'application/json, text/json;q=0.5'
     jsonld = 'application/ld+json'
     atom = 'application/atom+xml'
@@ -77,6 +91,9 @@ class RequestHelper:
             self.logger = Preprocessor.logger  #logging.getLogger(__name__)
         self.request_url = url
         self.redirect_url = None
+        self.resolved_url = None
+        self.redirect_list = []
+        self.redirect_status_list = []
         self.accept_type = AcceptTypes.default.value
         self.http_response = None
         self.parse_response = None
@@ -88,11 +105,23 @@ class RequestHelper:
         self.content_size = 0
         #maximum size which will be downloaded and analysed by F-UJU
         self.max_content_size = Preprocessor.max_content_size
+        self.checked_content_hash = None
+        self.authtoken = None
+        self.tokentype = None
+
+    def setAuthToken(self,authtoken, tokentype):
+        if isinstance(authtoken, str):
+            self.authtoken = authtoken
+        if tokentype in ['Bearer', 'Basic']:
+            self.tokentype = tokentype
 
     def setAcceptType(self, accepttype):
         if not isinstance(accepttype, AcceptTypes):
             raise TypeError('type must be an instance of AcceptTypes enum')
         self.accept_type = accepttype.value
+
+    def addAcceptType(self, mime_type):
+        self.accept_type= mime_type+','+self.accept_type
 
     def getAcceptType(self):
         return self.accept_type
@@ -118,7 +147,6 @@ class RequestHelper:
         return True
 
     def content_negotiate(self, metric_id='', ignore_html=True):
-        #TODO: not necessarily to be done with the landing page e.g. http://purl.org/vocommons/voaf resolves to a version URL which responds HTML instead of RDF
         self.metric_id = metric_id
         source = 'html'
         status_code = None
@@ -132,32 +160,29 @@ class RequestHelper:
                 cookiejar =  http.cookiejar.MozillaCookieJar()
                 context = ssl._create_unverified_context()
                 context.set_ciphers('DEFAULT@SECLEVEL=1')
-
-                opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookiejar), urllib.request.HTTPSHandler(context=context),urllib.request.HTTPHandler())
-
+                redirect_handler = FUJIHTTPRedirectHandler()
+                opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookiejar), urllib.request.HTTPSHandler(context=context),urllib.request.HTTPHandler(),redirect_handler )
                 urllib.request.install_opener(opener)
-
+                request_headers = {
+                    'Accept': self.accept_type,
+                    'User-Agent': 'F-UJI'}
+                if self.authtoken:
+                    request_headers['Authorization'] = self.tokentype+' '+self.authtoken
                 tp_request = urllib.request.Request(self.request_url,
-                                                    headers={
-                                                        'Accept': self.accept_type,
-                                                        'User-Agent': 'F-UJI'})
+                                                    headers=request_headers)
                 try:
                     tp_response = opener.open(tp_request,timeout = 10)
-                except urllib.error.URLError as e:
-                    '''
-                    if e.code >= 500:
-                        if 'doi.org' in self.request_url:
-                            self.logger.error(
-                                '{0} : DataCite/DOI content negotiation failed, status code -: {1}, {2} - {3}'.format(
-                                    metric_id, self.request_url, self.accept_type, str(e.code)))
-                        else:
-                            self.logger.error('{0} : Request failed, status code -: {1}, {2} - {3}'.format(
-                                metric_id, self.request_url, self.accept_type, str(e.code)))
-                    else:
-                    '''
-                    self.logger.warning('{0} : Request failed, reason -: {1}, {2} - {3}'.format(
-                        metric_id, self.request_url, self.accept_type, str(e)))
+                    self.redirect_list = redirect_handler.redirect_list
+                    self.redirect_status_list = redirect_handler.redirect_status_list
+                    self.redirect_url = redirect_handler.redirect_url
                 except urllib.error.HTTPError as e:
+                    self.response_status = int(e.code)
+                    try:
+                        self.redirect_url = redirect_handler.redirect_url
+                        self.redirect_list = redirect_handler.redirect_list
+                        self.redirect_status_list = redirect_handler.redirect_status_list
+                    except:
+                        pass
                     if e.code == 308:
                         self.logger.error(
                             '%s : F-UJI 308 redirect failed, most likely this patch: https://github.com/python/cpython/pull/19588/commits is not installed'
@@ -169,15 +194,68 @@ class RequestHelper:
                         else:
                             self.logger.error('{0} : Request failed, status code -: {1}, {2} - {3}'.format(
                                 metric_id, self.request_url, self.accept_type, str(e.code)))
+                    elif e.code == 400:
+                        try:
+                            #browsers automatically redirect to https in case a 400 occured for a http URL
+                            if redirect_handler.redirect_list:
+                                last_redirect_url = redirect_handler.redirect_list[-1]
+                                if 'http://' in last_redirect_url:
+                                    self.logger.warning(
+                                        '{0} : HTTP 400 Error after redirect to http page , trying to redirect to https page for -: {1}'.format(
+                                            metric_id, redirect_handler.redirect_list[-1]))
+                                    # This is what Browsers sometimes do:
+                                    last_redirect_url = last_redirect_url.replace('http:','https:')
+                                    tp_request = urllib.request.Request(last_redirect_url,
+                                                                        headers=request_headers)
+                                    tp_response = opener.open(tp_request, timeout=10)
+                        except Exception as e:
+                            print('Redirect fix error:'+str(e))
+                            pass
                     else:
                         self.logger.warning('{0} : Request failed, status code -: {1}, {2} - {3}'.format(
                             metric_id, self.request_url, self.accept_type, str(e.code)))
-                except Exception as e:
-                    self.logger.warning('{0} : Request failed, reason -: {1}, {2} - {3}'.format(
+                except urllib.error.URLError as e:
+                    self.logger.warning('{0} : Request failed, reason -: {1}, {2} - URLError: {3}'.format(
                         metric_id, self.request_url, self.accept_type, str(e)))
+                    self.response_status = 900
+                    try:
+                        urlerrmatch = re.search(r'\[Errno\s+(\-?[0-9]+)', str(e))
+                        if urlerrmatch:
+                            print(urlerrmatch[1])
+                            self.response_status = int(urlerrmatch[1])
+                    except:
+                        pass
+
+                    try:
+                        self.redirect_url = redirect_handler.redirect_url
+                        self.redirect_list = redirect_handler.redirect_list
+                        self.redirect_status_list = redirect_handler.redirect_status_list
+                    except:
+                        pass
+                except Exception as e:
+                    print('Request ERROR: ', e)
+                    self.logger.warning('{0} : Request failed, reason -: {1}, {2} - Error: {3}'.format(
+                        metric_id, self.request_url, self.accept_type, str(e)))
+                    # some internal status messages for optional analysis
+                    try:
+                        self.redirect_url = redirect_handler.redirect_url
+                        self.redirect_list = redirect_handler.redirect_list
+                        self.redirect_status_list = redirect_handler.redirect_status_list
+                    except:
+                        pass
+                    if 'NewConnectionError' in str(e):
+                        self.response_status = 601
+                    elif 'RemoteDisconnected' in str(e):
+                        self.response_status = 602
+                    elif 'Read timed out' in str(e):
+                        self.response_status = 603
+                    elif 'ConnectionResetError' in str(e):
+                        self.response_status = 604
+                    else:
+                        self.response_status = 1000
                 # redirect logger messages to metadata collection metric
                 if metric_id == 'FsF-F1-02D':
-                    self.logger.info('FsF-F2-01M : Trying to identify some EMBEDDED metadata in content retrieved during PID verification process (FsF-F1-02D)')
+                    #self.logger.info('FsF-F2-01M : Trying to identify some EMBEDDED metadata in content retrieved during PID verification process (FsF-F1-02D)')
                     metric_id = 'FsF-F2-01M'
 
                 if tp_response:
@@ -194,21 +272,31 @@ class RequestHelper:
                     self.response_header = tp_response.getheaders()
                     self.redirect_url = tp_response.geturl()
                     self.response_status = status_code = tp_response.status
-                    self.logger.info('%s : Content negotiation accept=%s, status=%s ' %
-                                     (metric_id, self.accept_type, str(status_code)))
-
+                    self.logger.info('%s : Content negotiation on %s accept=%s, status=%s ' %
+                                     (metric_id, self.request_url, self.accept_type ,str(status_code)))
                     self.content_type = self.getResponseHeader().get('Content-Type')
+                    if not self.content_type:
+                        self.content_type = self.getResponseHeader().get('content-type')
+                    #print(self.accept_type,self.content_type)
                     # key for content cache
                     checked_content_id = hash(str(self.redirect_url ) + str(self.content_type))
 
                     if checked_content_id in self.checked_content:
-                        source, self.parse_response, self.response_content, self.content_type, self.content_size, content_truncated = self.checked_content.get(checked_content_id)
+                        self.checked_content_hash = checked_content_id
+                        source = self.checked_content.get(checked_content_id).get('source')
+                        self.parse_response = self.checked_content.get(checked_content_id).get('parse_response')
+                        self.response_content = self.checked_content.get(checked_content_id).get('response_content')
+                        self.content_type = self.checked_content.get(checked_content_id).get('content_type')
+                        self.content_size = self.checked_content.get(checked_content_id).get('content_size')
+                        content_truncated = self.checked_content.get(checked_content_id).get('content_truncated')
                         self.logger.info('%s : Using Cached response content' % metric_id)
                     else:
                         content_truncated = False
                         if status_code == 200:
                             try:
-                                self.content_size = int(self.getResponseHeader().get('content-length'))
+                                self.content_size = int(self.getResponseHeader().get('Content-Length'))
+                                if not self.content_size:
+                                    self.content_size = int(self.getResponseHeader().get('content-length'))
                             except Exception as e:
                                 self.content_size = 0
                                 pass
@@ -299,7 +387,7 @@ class RequestHelper:
                                                 #since we already parse HTML in the landing page we ignore this and do not parse again
                                                 if ignore_html == False:
                                                     self.logger.info('%s : Found HTML page!' % metric_id)
-                                                    self.parse_response = self.parse_html(self.response_content)
+                                                    self.parse_response = self.response_content
                                                 else:
                                                     self.logger.info('%s : Ignoring HTML response' % metric_id)
                                                     self.parse_response = None
@@ -327,7 +415,7 @@ class RequestHelper:
                                                     self.parse_response = self.response_content
                                                     source = 'xml'
                                                 break
-                                            if at.name in ['json', 'jsonld', 'datacite_json', 'schemaorg']:
+                                            if at.name in ['json', 'jsonld', 'datacite_json', 'schemaorg'] or str(self.content_type).endswith('+json'):
                                                 try:
                                                     self.parse_response = json.loads(self.response_content)
                                                     source = 'json'
@@ -342,9 +430,18 @@ class RequestHelper:
                                                 self.parse_response = self.response_content
                                                 source = 'rdf'
                                                 break
+                                            if at.name in ['linkset']:
+                                                self.parse_response = self.response_content
+                                                source = 'txt'
+                                                break
                                     break
                                 # cache downloaded content
-                                self.checked_content[checked_content_id] = (source, self.parse_response, self.response_content, self.content_type, self.content_size, content_truncated)
+                                self.checked_content[checked_content_id] = {'source':source,
+                                                                            'parse_response':self.parse_response,
+                                                                            'response_content':self.response_content,
+                                                                            'content_type':self.content_type,
+                                                                            'content_size':self.content_size,
+                                                                            'content_truncated':content_truncated}
                             else:
                                 self.logger.warning('{0} : Content-type is NOT SPECIFIED'.format(metric_id))
                         else:
@@ -352,8 +449,7 @@ class RequestHelper:
                                 metric_id, str(status_code)))
                     tp_response.close()
                 else:
-
-                    self.logger.warning('{0} : No response received from -: {1}'.format(metric_id, self.request_url))
+                    self.logger.warning('{0} : No response received from -: {1}, {2}'.format(metric_id, self.request_url,self.accept_type))
             #except requests.exceptions.SSLError as e:
             except urllib.error.HTTPError as e:
                 self.logger.warning('%s : Content negotiation failed -: accept=%s, status=%s ' %
@@ -363,24 +459,5 @@ class RequestHelper:
                 self.logger.warning('{} : RequestException -: {} : {}'.format(metric_id, e.reason, self.request_url))
             except Exception as e:
                 print(e)
-
                 self.logger.warning('{} : Request Failed -: {} : {}'.format(metric_id, str(e), self.request_url))
         return source, self.parse_response
-
-    def parse_html(self, html_texts):
-        # extract contents from the landing page using extruct, which returns a dict with
-        # keys 'json-ld', 'microdata', 'microformat','opengraph','rdfa'
-        syntaxes = ['microdata', 'opengraph', 'json-ld']
-        try:
-            self.logger.info('%s : Trying to identify HTML embedded microdata or JSON -: %s' %
-                                (self.metric_id, self.request_url))
-            extracted = extruct.extract(html_texts, syntaxes=syntaxes)
-        except Exception as e:
-            extracted = None
-            self.logger.warning('%s : Failed to parse HTML embedded microdata or JSON -: %s' %
-                                (self.metric_id, self.request_url + ' ' + str(e)))
-        if isinstance(extracted, dict):
-            extracted = dict([(k, v) for k, v in extracted.items() if len(v) > 0])
-            if len(extracted) == 0:
-                extracted = None
-        return extracted

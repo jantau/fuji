@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fuji"
-version = "1.4.7b"
+version = "2.2.3"
 description = "FUJI (FAIRsFAIR Data Objects Assessment Service), A service to evaluate FAIR data objects based on FAIRsFAIR Metrics"
 authors = [
     "Robert Huber <rhuber@marum.de>",
@@ -9,7 +9,7 @@ authors = [
 license = "MIT"
 #TODO: figure out why the README causes failure of building the docker container
 #readme = "README.md"
-homepage = "https://www.fairsfair.eu/f-uji-automated-fair-data-assessment-tool"
+homepage = "https://www.f-uji.net"
 repository = "https://github.com/pangaea-data-publisher/fuji"
 keywords=[
     "PANGAEA",
@@ -49,6 +49,7 @@ include = [
 
 [tool.poetry.dependencies]
 python = "^3.7.1"
+pyRdfa3 = "~3.5.3"
 requests = "~2.24.0"
 pyyaml = "~5.4"
 extruct = "~0.13.0"
@@ -83,7 +84,7 @@ sphinx = {version = "^4.2.0", optional = true}
 docutils = {version =">=0.14,<0.18", optional = true}
 sphinx-rtd-theme = {version = "^1.0.0", optional = true}
 myst-parser = {version= "^0.16.1", optional = true}
-waitress ="~2.0.0"
+waitress ="~2.1.1"
 flask-limiter ="<=2.0.0"
 pyld = "~2.0.3"
 markupsafe = "~2.0.1"

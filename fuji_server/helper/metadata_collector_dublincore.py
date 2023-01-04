@@ -66,7 +66,7 @@ class MetaDataCollectorDublinCore(MetaDataCollector):
             a dictionary of Dublin Core metadata
         """
         dc_core_metadata = {}
-        dc_core_base_props = ['contributor', 'coverage', 'creator', 'date', 'description', 'format', 'identifier',
+        dc_core_base_props = ['contributor', 'coverage', 'creator', 'date', 'issued', 'description', 'format', 'identifier',
                               'language', 'publisher', 'relation', 'rights', 'source', 'subject', 'title', 'type']
         source = None
         if self.source_metadata is not None:
@@ -77,7 +77,9 @@ class MetaDataCollectorDublinCore(MetaDataCollector):
                 # meta_dc_matches = re.findall('<meta\s+([^\>]*)name=\"(DC|DCTERMS)?\.([a-z]+)\"(.*?)content=\"(.*?)\"',self.landing_html)
                 #exp = '<\s*meta\s*([^\>]*)name\s*=\s*\"(DC|DCTERMS)?\.([A-Za-z]+)(\.[A-Za-z]+)?\"(.*?)content\s*=\s*\"(.*?)\"'
                 meta_dc_matches = []
+                self.content_type = 'text/html'
                 try:
+
                     metasoup = BeautifulSoup(self.source_metadata, 'lxml')
                     meta_dc_soupresult = metasoup.findAll(
                         'meta', attrs={'name': re.compile(r'(DC|dc|DCTERMS|dcterms)\.([A-Za-z]+)')})
@@ -85,7 +87,6 @@ class MetaDataCollectorDublinCore(MetaDataCollector):
                     if len(meta_dc_soupresult) <= 0:
                         meta_dc_soupresult = metasoup.findAll(
                             'meta', attrs={'name':re.compile(r'('+'|'.join(dc_core_base_props)+')')})
-
                     for meta_tag in meta_dc_soupresult:
                         dc_name_parts = str(meta_tag['name']).split('.')
                         if len(dc_name_parts) == 1 and dc_name_parts[0] in dc_core_base_props:
@@ -94,7 +95,7 @@ class MetaDataCollectorDublinCore(MetaDataCollector):
                             dc_t = None
                             if len(dc_name_parts) == 3:
                                 dc_t = dc_name_parts[2]
-                            meta_dc_matches.append([dc_name_parts[1].lower(), dc_t, meta_tag.get('content')])
+                            meta_dc_matches.append([dc_name_parts[1], dc_t, meta_tag.get('content')])
                     #meta_dc_matches = re.findall(exp, self.source_metadata)
                 except Exception as e:
                     self.logger.exception('Parsing error, failed to extract DublinCore -: {}'.format(e))
@@ -104,18 +105,21 @@ class MetaDataCollectorDublinCore(MetaDataCollector):
                     dcterms = []
                     for dcitems in self.metadata_mapping.value.values():
                         if isinstance(dcitems, list):
-                            dcterms.extend(dcitems)
+                            for dcitem in dcitems:
+                                dcterms.append(str(dcitem).lower())
+                            #dcterms.extend(dcitems)
                         else:
-                            dcterms.append(dcitems)
+                            dcterms.append(str(dcitems).lower())
                     for dc_meta in meta_dc_matches:
                         # dc_meta --> ('', 'DC', 'creator', ' ', 'Hillenbrand, Claus-Dieter')
                         #key
-                        k = dc_meta[0]  #2
+                        k = str(dc_meta[0])  #2
                         #type
                         t = dc_meta[1]  #3
                         #value
                         v = dc_meta[2]  #5
-                        if k == 'date':
+
+                        if k.lower() == 'date':
                             if t == 'dateAccepted':
                                 dc_core_metadata['accepted_date'] = v
                             elif t == 'dateSubmitted':
@@ -123,10 +127,14 @@ class MetaDataCollectorDublinCore(MetaDataCollector):
 
                         # if self.isDebug:
                         #   self.logger.info('FsF-F2-01M: DublinCore metadata element, %s = %s , ' % (k, v)
-                        if k in dcterms:
+                        if k.lower() in dcterms:
                             #self.logger.info('FsF-F2-01M: DublinCore metadata element, %s = %s , ' % (k, v))
-                            elem = [key for (key, value) in Mapper.DC_MAPPING.value.items() if k in value
-                                    ][0]  # fuji ref fields
+                            try:
+                                elem = [key for (key, value) in Mapper.DC_MAPPING.value.items() if k.lower() in str(value).lower()
+                                        ][0]  # fuji ref fields
+                            except Exception as e:
+                                #nothing found so just continue
+                                pass
                             if elem == 'related_resources':
                                 #dc_core_metadata['related_resources'] = []
                                 # tuple of type and relation
@@ -134,7 +142,6 @@ class MetaDataCollectorDublinCore(MetaDataCollector):
                                 #qualifiers, subproperties (t):
                                 #https://www.dublincore.org/specifications/dublin-core/dcmes-qualifiers/
                                 #https://www.dublincore.org/specifications/dublin-core/dcq-html/
-
                                 if k in ['source', 'references']:
                                     t = 'wasDerivedFrom'
                                 elif k == 'relation':

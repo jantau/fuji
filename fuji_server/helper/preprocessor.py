@@ -21,6 +21,7 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+import mimetypes
 
 import yaml
 import json
@@ -29,6 +30,7 @@ import os
 from typing import Dict, Any
 from urllib.parse import urlparse
 import requests
+from fuji_server.helper.linked_vocab_helper import linked_vocab_helper
 
 
 class Preprocessor(object):
@@ -59,6 +61,7 @@ class Preprocessor(object):
     open_file_formats = {}
     re3repositories: Dict[Any, Any] = {}
     linked_vocabs = {}
+    linked_vocab_index = {}
     default_namespaces = []
     standard_protocols = {}
     resource_types = []
@@ -74,6 +77,8 @@ class Preprocessor(object):
     remote_log_host = None
     remote_log_path = None
     max_content_size = 5000000
+    google_custom_search_id = None
+    google_custom_search_api_key = None
 
     def __new__(cls):
         """Define what happens on object creation to ensure preprocessor is a singledton"""
@@ -82,6 +87,18 @@ class Preprocessor(object):
             cls._instance = super(Preprocessor, cls).__new__(cls)
             # Put any initialization here.
         return cls._instance
+
+    @classmethod
+    def set_mime_types(cls):
+        try:
+            mimes = requests.get('https://raw.githubusercontent.com/jshttp/mime-db/master/db.json').json()
+            for mime_type, mime_data in mimes.items():
+                if mime_data.get('extensions'):
+                    for ext in mime_data.get('extensions'):
+                        if '.' + ext not in mimetypes.types_map:
+                            mimetypes.add_type(mime_type, '.' + ext, strict=True)
+        except Exception as e:
+            cls.logger.warning('Loading additional mime types failed, will continue with standard set')
 
     @classmethod
     def set_max_content_size(cls, size):
@@ -99,6 +116,13 @@ class Preprocessor(object):
                     cls.logger.warning('Remote Logging not possible, URL response: ' + str(request.status_code))
             except Exception as e:
                 cls.logger.warning('Remote Logging not possible ,please correct : ' + str(host) + ' ' + str(path))
+
+    @classmethod
+    def set_google_custom_search_info(cls, search_id, api_key, web_search):
+        if api_key:
+            cls.google_custom_search_id = search_id
+            cls.google_custom_search_api_key= api_key
+            cls.google_web_search_enabled = web_search
 
     @classmethod
     def get_identifiers_org_data(cls):
@@ -145,18 +169,27 @@ class Preprocessor(object):
                     schemauri = schemadict.get('@id')
                     if str(schemauri).startswith('schema:'):
                         cls.schema_org_context.append(str(context).lower())
+            bioschema_context = cls.get_schema_org_creativeworks()
+            cls.schema_org_context.extend(bioschema_context)
+            cls.schema_org_context = list(set(cls.schema_org_context))
+
     @classmethod
-    def retrieve_schema_org_creativeworks(cls):
+    def retrieve_schema_org_creativeworks(cls, include_bioschemas=True):
         data=[]
         cw_path = os.path.join(cls.fuji_server_dir, 'data', 'creativeworktypes.txt')
         with open(cw_path) as f:
             data = f.read().splitlines()
-        cls.schema_org_creativeworks = data
+        if include_bioschemas:
+            bs_path = os.path.join(cls.fuji_server_dir, 'data', 'bioschemastypes.txt')
+            with open(bs_path) as f:
+                bdata = f.read().splitlines()
+                data.extend(bdata)
+        cls.schema_org_creativeworks = [item.lower() for item in data]
 
     @classmethod
-    def get_schema_org_creativeworks(cls):
+    def get_schema_org_creativeworks(cls, include_bioschemas=True):
         if not cls.schema_org_creativeworks:
-            cls.retrieve_schema_org_creativeworks()
+            cls.retrieve_schema_org_creativeworks(include_bioschemas)
         return cls.schema_org_creativeworks
 
     @classmethod
@@ -170,7 +203,7 @@ class Preprocessor(object):
         cls.METRIC_YML_PATH = yaml_metric_path
         cls.data_files_limit = limit
         cls.metric_specification = specification_uri
-        stream = open(cls.METRIC_YML_PATH, 'r', encoding="utf8")
+        stream = open(cls.METRIC_YML_PATH, 'r', encoding='utf8')
         try:
             specification = yaml.load(stream, Loader=yaml.FullLoader)
         except yaml.YAMLError as e:
@@ -358,9 +391,23 @@ class Preprocessor(object):
         ns_file_path = os.path.join(cls.fuji_server_dir, 'data', 'default_namespaces.txt')
         with open(ns_file_path) as f:
             #ns = [line.split(':',1)[1].strip() for line in f]
-            ns = [line.rstrip() for line in f]
+            ns = [line.rstrip().rstrip('/#') for line in f]
         if ns:
             cls.default_namespaces = ns
+
+    @classmethod
+    def get_linked_vocab_index(cls):
+        if not cls.linked_vocab_index:
+            cls.retrieve_linked_vocab_index()
+        return cls.linked_vocab_index
+
+    @classmethod
+    def retrieve_linked_vocab_index(cls):
+        lov_helper = linked_vocab_helper()
+        lov_helper.set_linked_vocab_index()
+        cls.linked_vocab_index = lov_helper.linked_vocab_index
+
+
 
     @classmethod
     def retrieve_linkedvocabs(cls, lov_api, lodcloud_api, isDebugMode):
@@ -457,7 +504,7 @@ class Preprocessor(object):
                     json.dump(vocabs, f)
                     cls.linked_vocabs = vocabs
             except IOError as e:
-                cls.logger.error("Couldn't write to file {}.".format(ld_path))
+                cls.logger.error('Couldn\'t write to file {}.'.format(ld_path))
         #for vocab in vocabs.items():
 
 

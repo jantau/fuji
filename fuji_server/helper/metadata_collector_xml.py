@@ -20,6 +20,7 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+import idutils
 
 from fuji_server.helper.metadata_collector import MetaDataCollector
 from fuji_server.helper.request_helper import RequestHelper, AcceptTypes
@@ -51,7 +52,7 @@ class MetaDataCollectorXML(MetaDataCollector):
     """
     target_url = None
 
-    def __init__(self, loggerinst, target_url, link_type='embedded'):
+    def __init__(self, loggerinst, target_url, link_type='embedded', pref_mime_type=None):
         """
         Parameters
         ----------
@@ -61,10 +62,37 @@ class MetaDataCollectorXML(MetaDataCollector):
             Logger instance
         link_type : str, optional
             Link Type, default is 'embedded'
+        pref_mime_type : str, optional
+            Preferred mime type, e.g. specific XML format
         """
         self.target_url = target_url
         self.link_type = link_type
+        self.pref_mime_type = pref_mime_type
         super().__init__(logger=loggerinst)
+
+    def getAllURIs(self, metatree):
+        founduris = []
+        try:
+            #all text element values
+            elr = metatree.xpath('//text()')
+            for el in elr:
+                if str(el).strip():
+                    if el not in founduris:
+                        if idutils.is_url(el) or idutils.is_urn(el):
+                            founduris.append(str(el))
+            #all attribute values
+            alr = metatree.xpath('//@*')
+            for al in alr:
+                if al not in founduris:
+                    if idutils.is_url(al) or idutils.is_urn(al):
+                        founduris.append(str(al))
+            founduris =  list(set(founduris))
+            #xpath
+            # //text()
+            # //@*
+        except Exception as e:
+            print('getAllURIs XML error: '+str(e))
+        return founduris
 
     def parse_metadata(self):
         """Parse the XML metadata from the data.
@@ -80,6 +108,8 @@ class MetaDataCollectorXML(MetaDataCollector):
         xml_mapping = None
         metatree = None
         envelope_metadata = {}
+        self.content_type = 'application/xml'
+
         XSI = 'http://www.w3.org/2001/XMLSchema-instance'
         if self.link_type == 'linked':
             source_name = self.getEnumSourceNames().TYPED_LINK.value
@@ -94,10 +124,14 @@ class MetaDataCollectorXML(MetaDataCollector):
         dc_core_metadata = None
         requestHelper = RequestHelper(self.target_url, self.logger)
         requestHelper.setAcceptType(AcceptTypes.xml)
+        requestHelper.setAuthToken(self.auth_token, self.auth_token_type)
+        if self.pref_mime_type:
+            requestHelper.addAcceptType(self.pref_mime_type)
         #self.logger.info('FsF-F2-01M : Sending request to access metadata from -: {}'.format(self.target_url))
         neg_source, xml_response = requestHelper.content_negotiate('FsF-F2-01M')
         if requestHelper.response_content is not None:
-            self.logger.info('FsF-F2-01M : Trying to extract/parse XML metadata from URL -: {}'.format(source_name))
+            self.content_type = requestHelper.content_type
+            self.logger.info('FsF-F2-01M : Trying to extract/parse XML metadata from URL -: {}'.format(self.target_url))
             #dom = lxml.html.fromstring(self.landing_html.encode('utf8'))
             if neg_source != 'xml':
                 self.logger.info('FsF-F2-01M : Expected XML but content negotiation responded -: ' + str(neg_source))
@@ -139,6 +173,9 @@ class MetaDataCollectorXML(MetaDataCollector):
                         'FsF-F2-01M : XML parsing failed -: '+str(e)
                     )
                 if metatree is not None:
+                    #self.setURIValues(metatree)
+                    #print(list(set(self.getURIValues())))
+
                     self.logger.info(
                         'FsF-F2-01M : Found some XML properties, trying to identify (domain) specific format to parse'
                     )
@@ -146,12 +183,19 @@ class MetaDataCollectorXML(MetaDataCollector):
                     nsmatch = re.match(r'^\{(.+)\}(.+)$', metatree.tag)
                     schema_locations = set(metatree.xpath('//*/@xsi:schemaLocation', namespaces={'xsi': XSI}))
                     for schema_location in schema_locations:
-                        self.namespaces = re.split('\s', schema_location)
+                        self.namespaces.extend(re.split(r'\s', re.sub(r'\s+', r' ',schema_location)))
+                        #self.namespaces = re.split('\s', schema_location)
+                    element_namespaces = set(metatree.xpath('//namespace::*'))
+                    for el_ns in element_namespaces:
+                        if len(el_ns) == 2:
+                            if el_ns[1] not in self.namespaces:
+                                self.namespaces.append(el_ns[1])
                     if nsmatch:
                         root_namespace = nsmatch[1]
                         root_element = nsmatch[2]
                         #print('#' + root_element + '#', root_namespace)
-                        self.namespaces.append(root_namespace)
+                        #put the root namespace at the start f list
+                        self.namespaces.insert(0,root_namespace)
                     if root_element == 'codeBook':
                         xml_mapping = Mapper.XML_MAPPING_DDI_CODEBOOK.value
                         self.logger.info('FsF-F2-01M : Identified DDI codeBook XML based on root tag')
@@ -177,14 +221,15 @@ class MetaDataCollectorXML(MetaDataCollector):
                     elif root_element in ['MD_Metadata', 'MI_Metadata']:
                         xml_mapping = Mapper.XML_MAPPING_GCMD_ISO.value
                         self.logger.info('FsF-F2-01M : Identified ISO 19115 XML based on root tag')
+                    elif root_element == 'rss':
+                        self.logger.info('FsF-F2-01M : Identified RSS/GEORSS XML based on root tag')
                     elif root_namespace:
                         if 'datacite.org/schema' in root_namespace:
                             xml_mapping = Mapper.XML_MAPPING_DATACITE.value
                             self.logger.info('FsF-F2-01M : Identified DataCite XML based on namespace')
                     #print('XML Details: ',(self.target_url,root_namespace, root_element))
-                    f = open("xml.txt", "a")
-                    f.write(str(self.target_url)+'\t'+str(root_namespace)+'\t'+str(root_element)+'\r\n')
-                    f.close()
+                    linkeduris = self.getAllURIs(metatree)
+                    self.setLinkedNamespaces(linkeduris)
                     if xml_mapping is None:
                         self.logger.info(
                             'FsF-F2-01M : Could not identify (domain) specific XML format to parse'
@@ -206,8 +251,10 @@ class MetaDataCollectorXML(MetaDataCollector):
             xml_metadata = {k: v for k, v in xml_metadata.items() if v}
 
         if xml_metadata:
+            if requestHelper.checked_content_hash:
+                requestHelper.checked_content.get(requestHelper.checked_content_hash)['checked'] = True
             self.logger.info(
-                'FsF-F2-01M : Found some metadata in XML -: '+(str(xml_metadata))
+                'FsF-F2-01M : Found some metadata in XML -: '+(str(xml_metadata.keys()))
             )
         else:
             self.logger.info('FsF-F2-01M : Could not identify metadata properties in XML')
@@ -249,6 +296,8 @@ class MetaDataCollectorXML(MetaDataCollector):
                     if ':' in attribute:
                         if attribute.split(':')[0] == 'xlink':
                             attribute = '{http://www.w3.org/1999/xlink}' + attribute.split(':')[1]
+                        elif attribute.split(':')[0] == 'xml':
+                            attribute = '{http://www.w3.org/XML/1998/namespace}' + attribute.split(':')[1]
                 try:
                     subtrees = tree.findall(pathdef[0])
                 except Exception as e:
@@ -298,7 +347,43 @@ class MetaDataCollectorXML(MetaDataCollector):
                             res['related_resources'].append({'related_resource': relres, 'resource_type': reltype})
                         ri += 1
         #object_content_identifiers
+        '''
+        # The code below would theoretically also consider information which does not include a content identifier but only sie or type of content
+        res['object_content_identifier'] = []
+        if res.get('object_content_identifier_url'):
+        #if not isinstance(res.get('object_content_identifier_url'), list):
+        #    res['object_content_identifier_url'] = [res.get('object_content_identifier_url')]
+        if not isinstance(res.get('object_content_identifier_size'), list):
+            res['object_content_identifier_size'] = [res.get('object_content_identifier_size')]
+        if not isinstance(res.get('object_content_identifier_type'), list):
+            res['object_content_identifier_type'] = [res.get('object_content_identifier_type')]
 
+        object_content_count = max(len(res.get('object_content_identifier_url') or []),
+                                      len(res.get('object_content_identifier_type') or []),
+                                      len(res.get('object_content_identifier_size') or []))
+
+        for content_index in range(object_content_count):
+            try:
+                content_url = res['object_content_identifier_url'][content_index]
+            except:
+                content_url = None
+            try:
+                content_size = res['object_content_identifier_size'][content_index]
+            except:
+                content_size = None
+            try:
+                content_type = res['object_content_identifier_type'][content_index]
+            except:
+                content_type = None
+            res['object_content_identifier'].append({
+                'url': content_url,
+                'size': content_size,
+                'type': content_type
+            })
+        res.pop('object_content_identifier_type', None)
+        res.pop('object_content_identifier_size', None)
+        res.pop('object_content_identifier_url', None)
+        '''
         if res.get('object_content_identifier_url'):
             res['object_content_identifier'] = []
             if not isinstance(res['object_content_identifier_url'], list):

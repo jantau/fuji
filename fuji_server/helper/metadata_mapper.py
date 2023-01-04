@@ -25,6 +25,23 @@ from enum import Enum
 
 
 class Mapper(Enum):
+    def flip_dict(dict_to_flip):
+        flipped_dict = {}
+        if isinstance(dict_to_flip, dict):
+            for dkey, dvalue in dict_to_flip.items():
+                if isinstance(dvalue, list):
+                    for dval in dvalue:
+                        if isinstance(dval, tuple):
+                            try:
+                                flipped_dict[dval[0]] = (dkey,dval[1])
+                            except:
+                                pass
+                        else:
+                            flipped_dict[dval] = dkey
+                else:
+                    flipped_dict[dvalue] = dkey
+        return flipped_dict
+
     """
     Enum class to Map metadata into reference metadata list, access right code, provenance,
     and metadata sources, e.g., Dublin Core, Open Graph, Microdata, Datacite, ORE Atom, Schema.org, etc.
@@ -33,7 +50,7 @@ class Mapper(Enum):
     # List of PIDS e.g. those listed in datacite schema
     VALID_PIDS = [
         'ark', 'arxiv', 'bioproject', 'biosample', 'doi', 'ensembl', 'genome', 'gnd', 'handle', 'lsid', 'pmid', 'pmcid',
-        'purl', 'refseq', 'sra', 'uniprot', 'urn'
+        'purl', 'refseq', 'sra', 'uniprot', 'urn','identifiers.org','w3id'
     ]
 
     #identifiers.org pattern
@@ -52,7 +69,7 @@ class Mapper(Enum):
         'object_content_identifier', 'access_level', 'access_free', 'policy', 'related_resources', 'provenance_general',
         'measured_variable', 'method', 'creation_date', 'contributor', 'version', 'license', 'data_file_format',
         'file_format_only', 'object_type', 'data_size', 'datacite_client', 'modified_date', 'created_date',
-        'right_holder', 'object_size'
+        'right_holder', 'object_size', 'language'
     ]
 
     # core metadata elements (FsF-F2-01M)
@@ -86,44 +103,64 @@ class Mapper(Enum):
         'application/gzip', 'application/zstd', 'application/octet-stream', 'application/vnd.ms-cab-compressed',
         'application/zip', 'application/x-gzip'
     ]
+    HIGHWIRE_MAPPING = {
+        'object_identifier': ['citation_arxiv_id','citation_pmid','citation_doi','citation_id'],
+        'creator': ['citation_author','citation_authors'],
+        'title': 'citation_title',
+        'publisher': 'citation_publisher',
+        'publication_date': ['citation_date', 'citation_publication_date'],
+        'summary': ['citation_abstract_html_url'],
+        'keywords': 'citation_keywords',
+        'related_resources': [
+            'citation_reference', 'citation_collection_id'
+        ],
+        'object_type': [('citation_inbook_title','Book'),
+                        ('citation_conference_title','ScholarlyArticle'),
+                        ('citation_dissertation_institution', 'Thesis'),
+                        ('citation_dissertation_name', 'Thesis')
+                        ('citation_journal_abbrev','ScholarlyArticle'),
+                        ('citation_technical_report_institution','TechArticle'),
+                        ('citation_technical_report_number','TechArticle'),
+                        ('citation_patent_country','Patent')],
+        'language': 'citation_language'
+    }
+
+    EPRINTS_MAPPING = {
+        'object_identifier': ['id_number','official_url'],
+        'creator': 'creators_name',
+        'title': 'title',
+        'publication_date': ['date', 'datestamp'],
+        'object_type': 'type',
+        'publisher': 'publisher',
+        'summary' :'abstract'
+    }
+
 
     # https://www.dublincore.org/specifications/dublin-core/dcmi-terms/
     # dc: rights, dcterm: accessRights, rightsHolder?
     # license: Recommended practice is to identify the license document with a URI. If this is not possible or feasible, a literal value that identifies the license may be provided.
     DC_MAPPING = {
-        'object_identifier':
-        'identifier',
-        'creator':
-        'creator',
-        'title':
-        'title',
-        'contributor':
-        'contributor',
-        'publisher':
-        'publisher',
-        'publication_date': ['date', 'available', 'issued'],
-        'summary': ['abstract', 'description'],
-        'keywords':
-        'subject',
-        'object_type':
-        'type',
-        'modified_date':
-        'modified',
-        'created_date':
-        'created',
-        'license':
-        'license',
-        'file_format_only':
-        'format',
+        'object_identifier' : 'identifier',
+        'creator' : 'creator',
+        'title' : 'title',
+        'contributor' : 'contributor',
+        'publisher' : 'publisher',
+        'publication_date' : ['date', 'available', 'issued'],
+        'summary' : ['abstract', 'description'],
+        'keywords' : 'subject',
+        'object_type' : 'type',
+        'modified_date' : 'modified',
+        'created_date' : 'created',
+        'license' : 'license',
+        'file_format_only' : 'format',
         'access_level': ['rights', 'accessRights'],
-        'date_available':
-        'available',
-        'provenance_general':
-        'provenance',
+        'date_available' : 'available',
+        'provenance_general' : 'provenance',
         'related_resources': [
             'relation', 'source', 'references', 'hasVersion', 'isReferencedBy', 'isVersionOf', 'hasVersion', 'replaces',
             'requires', 'conformsTo', 'hasFormat', 'hasPart', 'isPartOf', 'isReplacedBy', 'isRequiredBy'
-        ]
+        ],
+        'language' : 'language'
     }
 
     # https://ogp.me/
@@ -133,16 +170,17 @@ class Mapper(Enum):
         'object_identifier': 'og:url',
         'summary': 'og:description',
         'object_type': 'og:type',
-        'publisher': 'og:site_name'
+        'publisher': 'og:site_name',
+        'language':'og:locale'
     }
 
     # Schema.org
     # conditionsOfAccess, usageInfo?, isAccessibleForFree
     ## A license document that applies to this content, typically indicated by URL.
-    SCHEMAORG_MAPPING = '{title: name[*]."@value" || name, object_type: "@type", '\
+    SCHEMAORG_MAPPING = '{title: name[*]."@value" || name || headline[*]."@value" || headline, object_type: "@type", '\
                             'publication_date: datePublished."@value" || datePublished || dateCreated, '\
                             'modified_date: dateModified."@value" ||dateModified, ' \
-                           'creator: creator[?"@type" ==\'Person\'].name || creator[?"@type" ==\'Organization\'].name || author[*].name || creator.name || author.name, ' \
+                           'creator: creator[?"@type" ==\'Person\'].name || creator[?"@type" ==\'Organization\'].name || author[*].name || creator[*].name || creator.name || author.name, ' \
                            'creator_first: creator[*].givenName || author[*].givenName || creator.givenName || author.givenName,' \
                            'creator_last: creator[*].familyName || author[*].familyName || creator.familyName || author.familyName,' \
                            'contributor: contributor[*].name || contributor[*].familyName, ' \
@@ -150,16 +188,19 @@ class Mapper(Enum):
                            'publisher: publisher.name || provider.name || publisher || provider, ' \
                            'license: license."@id" || license[?"@type" ==\'CreativeWork\'].id || license[?"@type" ==\'CreativeWork\'].url || license[?"@type" ==\'CreativeWork\'].name || license, ' \
                            'summary: description, keywords: keywords, ' \
-                           'object_identifier: (identifier.value || identifier[0].value || identifier || "@id") || (url || url."@id") , ' \
+                           'object_identifier: [((identifier.value || identifier[*].value || identifier || "@id") || (url || url."@id")) , ' \
+                        '(sameAs."@id" || sameAs[0]."@id" || sameAs.url || sameAs[0].url || sameAs)][], ' \
                             'access_level: conditionsOfAccess, ' \
                             'access_free:  (isAccessibleForFree || free), ' \
                             'measured_variable: variableMeasured[*].name || variableMeasured , object_size: size,' \
                             'related_resources: [{related_resource: (isPartOf."@id" || isPartOf[0]."@id" || isPartOf.url || isPartOf[0].url || isPartOf), relation_type: \'isPartOf\'}, ' \
+                            '{related_resource: (sameAs."@id" || sameAs[0]."@id" || sameAs.url || sameAs[0].url || sameAs), relation_type: \'sameAs\'},' \
                             '{related_resource: (includedInDataCatalog."@id" || includedInDataCatalog[0]."@id" || includedInDataCatalog.url || includedInDataCatalog[0].url || includedInDataCatalog.name || includedInDataCatalog[0].name || includedInDataCatalog), relation_type: \'isPartOf\'}, ' \
                             '{related_resource: (subjectOf."@id" || subjectOf[0]."@id" || subjectOf.url ||subjectOf[0].url || subjectOf.name || subjectOf[0].name || subjectOf), relation_type: \'isReferencedBy\'},' \
                             '{related_resource: (isBasedOn."@id" || isBasedOn[0]."@id" || isBasedOn.url || isBasedOn[0].url || isBasedOn) , relation_type: \'isBasedOn\'} , ' \
                             '{related_resource: "@reverse".isBasedOn[0]."@id" || "@reverse".isBasedOn."@id" || "@reverse".isBasedOn[0].url || isBasedOn , relation_type: \'isBasisFor\'} ], ' \
-                            'object_content_identifier: (distribution[*].{url: contentUrl, type: (encodingFormat || fileFormat), size: (contentSize || fileSize), profile: schemaVersion} || [distribution.{url: contentUrl, type: (encodingFormat || fileFormat), size: (contentSize || fileSize), profile: schemaVersion}])}'
+                            'object_content_identifier: (distribution[*].{url: contentUrl, type: (encodingFormat || fileFormat), size: (contentSize || fileSize), profile: schemaVersion} || [distribution.{url: contentUrl, type: (encodingFormat || fileFormat), size: (contentSize || fileSize), profile: schemaVersion}])' \
+                            'language: inLanguage.name || inLanguage.alternateName || inLanguage}'
     # 'related_resources: [{related_resource: isPartOf, relation_type: \'isPartOf\'}, {related_resource: isBasedOn, relation_type: \'isBasedOn\'}], ' \
 
     #TODO: more real life examples are needed to provide a valid mapping for microdata
@@ -175,14 +216,17 @@ class Mapper(Enum):
                         'contributor: contributors[*].name || contributors[*].familyName, '\
                         'right_holder: contributors[?contributorType == \'RightsHolder\'], '\
                         'title: titles[0].title, keywords: subjects[*].subject, publication_date: dates[?dateType ==\'Available\'].date || publicationYear,' \
-                        'data_size:sizes[0], data_file_format: formats, license: rightsList[*].rightsUri || rightsList[*].rights ,' \
+                        'data_size:sizes[0], data_file_format: formats, ' \
+                        'license: rightsList[*].rightsUri || rightsList[*].rights ,' \
                         'summary: descriptions[?descriptionType == \'Abstract\'].description || descriptions[0].description, ' \
                         'related_resources: ( relatedIdentifiers[*].{related_resource: relatedIdentifier, relation_type:relationType, scheme_uri: schemeUri}), datacite_client: clientId, ' \
                         'modified_date: dates[?dateType == \'Updated\'].date,' \
                         'created_date: dates[?dateType == \'Created\'].date,' \
                         'accepted_date: dates[?dateType == \'Accepted\'].date,' \
                         'submitted_date: dates[?dateType == \'Submitted\'].date,' \
-                        'object_content_identifier:  {url: contentUrl} , access_level: rightsList[*].rightsUri || rightsList[*].rights }'
+                        'object_content_identifier:  {url: contentUrl} , ' \
+                        'access_level: rightsList[*].rightsUri || rightsList[*].rights, ' \
+                        'language: language }'
     #'related_resources: relatedIdentifiers[*].[relatedIdentifier,relationType]}'
 
     PROVENANCE_MAPPING = {
@@ -212,29 +256,31 @@ class Mapper(Enum):
     GENERIC_SPARQL = """
             PREFIX dct: <http://purl.org/dc/terms/>
             PREFIX dc: <http://purl.org/dc/elements/1.1/>
-            SELECT  ?object_identifier ?title ?summary ?publisher ?publication_date ?creator ?object_type ?license ?access_level ?keywords ?references ?source ?isVersionOf ?isReferencedBy ?isPartOf ?hasVersion ?replaces ?hasPart ?isReplacedBy ?requires ?isRequiredBy
+            PREFIX sdo: <http://schema.org/>
+            SELECT  ?object_identifier ?title ?summary ?publisher ?publication_date ?creator ?object_type ?license ?access_level ?keywords ?references ?source ?isVersionOf ?isReferencedBy ?isPartOf ?hasVersion ?replaces ?hasPart ?isReplacedBy ?requires ?isRequiredBy ?language
             WHERE {
-            OPTIONAL {?dataset  dct:title|dc:title ?title}
-            OPTIONAL {?dataset dct:identifier|dc:identifier ?object_identifier}
-            OPTIONAL {?dataset  dct:description|dc:description ?summary}
-            OPTIONAL {?dataset  dct:publisher|dc:publisher ?publisher}
-            OPTIONAL {?dataset  dct:created|dct:issued|dct:date|dc:created|dc:issued|dc:date ?publication_date}
-            OPTIONAL {?dataset  dct:creator|dc:creator ?creator}
+            OPTIONAL {?dataset  dct:title|dc:title|sdo:name ?title}
+            OPTIONAL {?dataset dct:identifier|dc:identifier|sdo:identifier ?object_identifier}
+            OPTIONAL {?dataset  dct:description|dc:description|sdo:abstract ?summary}
+            OPTIONAL {?dataset  dct:publisher|dc:publisher|sdo:publisher ?publisher}
+            OPTIONAL {?dataset  dct:created|dct:issued|dct:date|dc:created|dc:issued|dc:date|sdo:dateCreated|sdo:datePublished ?publication_date}
+            OPTIONAL {?dataset  dct:creator|dc:creator|sdo:author ?creator}
             OPTIONAL {?dataset  dct:type|dc:type ?object_type}
-            OPTIONAL {?dataset  dct:license|dc:license ?license}
+            OPTIONAL {?dataset  dct:license|dc:license|sdo:license ?license}
             OPTIONAL {?dataset  dct:accessRights|dct:rights|dc:rights ?access_level}
-            OPTIONAL {?dataset  dct:subject|dc:subject ?keywords}
+            OPTIONAL {?dataset  dct:subject|dc:subject|sdo:keywords ?keywords}
             OPTIONAL {?dataset  dct:references|dc:references ?references}
             OPTIONAL {?dataset  dct:isReferencedBy ?isReferencedBy}
             OPTIONAL {?dataset  dc:source|dct:source ?source}
             OPTIONAL {?dataset  dct:isVersionOf ?isVersionOf}
-            OPTIONAL {?dataset  dct:isPartOf ?isPartOf}
+            OPTIONAL {?dataset  dct:isPartOf|sdo:isPartOf ?isPartOf}
             OPTIONAL {?dataset  dct:hasVersion ?hasVersion}
             OPTIONAL {?dataset  dct:replaces ?replaces}
             OPTIONAL {?dataset  dct:hasPart ?hasPart}
             OPTIONAL {?dataset  dct:requires ?requires}
-            OPTIONAL {?dataset  dct:isRequiredBy ?isRequiredBy}
-            }
+            OPTIONAL {?dataset  dct:isRequiredBy ?isRequiredBy} 
+            OPTIONAL {?dataset  dct:language|dc:language|sdo:inLanguage ?language}           
+            }LIMIT 1
             """
 
     #################  XML Mappings ###############
@@ -291,7 +337,11 @@ class Mapper(Enum):
         },
         'provenance_general': {
             'path': './{*}provenance'
-        }
+        },
+        'language': {
+            'path': './{*}language'
+        },
+
     }
 
     XML_MAPPING_DATACITE = {
@@ -333,6 +383,9 @@ class Mapper(Enum):
         },
         'access_level': {
             'path': ['./{*}rightsList/{*}rights', './{*}rightsList/{*}rights@@rightsURI']
+        },
+        'language': {
+            'path': './{*}language'
         }
     }
 
@@ -387,6 +440,9 @@ class Mapper(Enum):
         },
         'license': {
             'path': ['./{*}accessCondition', './{*}accessCondition@@type', './{*}accessCondition@@href']
+        },
+        'language':{
+            'path':'./{*}language/{*}languageTerm'
         }
     }
 
@@ -432,6 +488,9 @@ class Mapper(Enum):
         },
         'object_content_identifier_size': {
             'path': './{*}dataset/{*}dataTable/{*}physical/{*}distribution/{*}online/{*}size'
+        },
+        'language': {
+            'path': './{*}dataset/{*}language'
         }
     }
     XML_MAPPING_CMD ={
@@ -546,7 +605,8 @@ class Mapper(Enum):
         'object_identifier': {
             'path': [
                 './{*}stdyDscr/{*}dataAccs/{*}setAvail/{*}accsPlac@@URI',
-                './{*}docDscr/{*}citation/{*}titlStmt/{*}IDNo', './{*}docDscr/{*}citation/{*}holdings@@URI',
+                './{*}docDscr/{*}citation/{*}titlStmt/{*}IDNo',
+                './{*}docDscr/{*}citation/{*}holdings@@URI',
                 './{*}stdyDscr/{*}citation/{*}titlStmt/{*}IDNo'
             ]
         },
@@ -575,6 +635,10 @@ class Mapper(Enum):
         },
         'measured_variable': {
             'path': './{*}dataDscr/{*}var@@name'
+        },
+        'language':{
+            'path': ['./{*}codeBook@@lang',
+                     './{*}stdyDscr/{*}citation/{*}titlStmt/{*}titl@@xml:lang']
         }
     }
     XML_MAPPING_DIF ={
@@ -714,5 +778,8 @@ class Mapper(Enum):
                 './{*}identificationInfo//{*}aggregationInfo/{*}MD_AggregateInformation/{*}associationType/{*}DS_AssociationTypeCode@@codeListValue',
                 './{*}identificationInfo//{*}aggregationInfo/{*}MD_AggregateInformation/{*}associationType/{*}DS_AssociationTypeCode@@codeListValue'
             ]
+        },
+        'language': {
+            'path':'./{*}language/{*}LanguageCode@@codeListValue'
         }
     }

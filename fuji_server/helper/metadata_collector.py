@@ -29,6 +29,7 @@ from urlextract import URLExtract
 from fuji_server.helper import metadata_mapper
 from fuji_server.helper.metadata_mapper import Mapper
 from fuji_server.helper.preprocessor import Preprocessor
+from fuji_server.helper.linked_vocab_helper import linked_vocab_helper
 
 
 class MetaDataCollector(object):
@@ -80,6 +81,7 @@ class MetaDataCollector(object):
     # Using enum class create enumerations of metadata sources
     class Sources(enum.Enum):
         """"Enum class to enumerate metadata sources."""
+        HIGHWIRE_EPRINTS ='Embedded Highwire or Eprints'
         DUBLINCORE = 'Embedded DublinCore'
         OPENGRAPH = 'Embedded OpenGraph'
         SCHEMAORG_EMBED = 'Schema.org JSON-LD (Embedded)'
@@ -87,7 +89,8 @@ class MetaDataCollector(object):
         DATACITE_JSON = 'Datacite Search'
         TYPED_LINK = 'Typed Links'
         SIGN_POSTING = 'Signposting Typed Links'
-        RDF_TYPED_LINKS = 'RDF-based Typed Links'  #Links in header which lead to a RDF resource
+        XML_TYPED_LINKS = 'Generic XML, Typed Links'
+        RDF_TYPED_LINKS = 'Linked Data (RDF), Typed Links'  #Links in header which lead to a RDF resource
         LINKED_DATA = 'Linked Data (RDF)'
         B2FIND = 'B2FIND Metadata Aggregator'
         GUESSED_XML = 'Guessed XML Link'
@@ -114,11 +117,22 @@ class MetaDataCollector(object):
         self.metadata_mapping = mapping
         self.logger = logger
         self.target_metadata = {}
+        #namespaces used in the declaration parts
         self.namespaces = []
+        #namespaces recognized in lonked URIs
+        self.linked_namespaces = {}
+        self.content_type = None
+        self.uris = []
+        self.auth_token_type = 'Basic'
+        self.auth_token = None
+        self.accept_type = None
 
     @classmethod
     def getEnumSourceNames(cls) -> Sources:
         return cls.Sources
+
+    def setAcceptType(self, type):
+        self.accept_type = type
 
     def getMetadataMapping(self):
         return self.metadata_mapping
@@ -144,29 +158,34 @@ class MetaDataCollector(object):
     def getNamespaces(self):
         return self.namespaces
 
-    def getNamespacesfromIRIs(self, meta_source):
+    def getLinkedNamespaces(self):
+        return self.linked_namespaces
+
+    def getContentType(self):
+        return self.content_type
+
+    def setLinkedNamespaces(self, meta_source):
         """Return the Namespaces given the Internatiolized Resource Identifiers(IRIs)
 
         Parameters
         ----------
-        meta_source:str
+        meta_source:str or lst
         """
         extractor = URLExtract()
-        namespaces = set()
+        namespaces = {}
+        found_urls = []
+        lov_helper = linked_vocab_helper(Preprocessor.linked_vocab_index)
         if meta_source is not None:
-            for url in set(extractor.gen_urls(str(meta_source))):
-                namespace_candidate = url.rsplit('/', 1)[0]
-                if namespace_candidate != url:
-                    namespaces.add(namespace_candidate)
-                else:
-                    namespace_candidate = url.rsplit('#', 1)[0]
-                    if namespace_candidate != url:
-                        namespaces.add(namespace_candidate)
+            if isinstance(meta_source, str):
+                found_urls = set(extractor.gen_urls(str(meta_source)))
+            elif isinstance(meta_source, list):
+                found_urls = set(meta_source)
+            for url in found_urls:
+                if isinstance(url, str):
+                    found_lov = lov_helper.get_linked_vocab_by_iri(url)
+                    if found_lov:
+                        self.linked_namespaces[found_lov.get('namespace')] = found_lov
 
-            vocabs = Preprocessor.getLinkedVocabs()
-            lod_namespaces = [d['namespace'] for d in vocabs if 'namespace' in d]
-            for ns in namespaces:
-                if ns + '/' in lod_namespaces:
-                    self.namespaces.append(ns + '/')
-                elif ns + '#' in lod_namespaces:
-                    self.namespaces.append(ns + '#')
+    def set_auth_token(self, authtoken, authtokentype):
+        self.auth_token = authtoken
+        self.auth_token_type = authtokentype

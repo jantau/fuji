@@ -24,6 +24,8 @@
 
 import json
 import jmespath
+from pyld import jsonld
+
 from fuji_server.helper.metadata_collector import MetaDataCollector
 from fuji_server.helper.preprocessor import Preprocessor
 from fuji_server.helper.request_helper import RequestHelper, AcceptTypes
@@ -55,7 +57,7 @@ class MetaDataCollectorSchemaOrg(MetaDataCollector):
     source_name = None
     SCHEMA_ORG_CONTEXT = Preprocessor.get_schema_org_context()
     SCHEMA_ORG_CREATIVEWORKS = Preprocessor.get_schema_org_creativeworks()
-    def __init__(self, sourcemetadata, mapping, loggerinst, pidurl):
+    def __init__(self, sourcemetadata, mapping, loggerinst, pidurl, source = None):
         """
         Parameters
         ----------
@@ -67,9 +69,12 @@ class MetaDataCollectorSchemaOrg(MetaDataCollector):
             Logger instance
         pidurl : str
             PID URL
+        source : str
+            Source (e.g. typed links etc..)
         """
         #self.is_pid = ispid
         self.pid_url = pidurl
+        self.source_name = source
         super().__init__(logger=loggerinst, mapping=mapping, sourcemetadata=sourcemetadata)
 
     #work around in case a lson-ld graph is given
@@ -120,15 +125,21 @@ class MetaDataCollectorSchemaOrg(MetaDataCollector):
             a dictionary of metadata in RDF graph
         """
         jsnld_metadata = {}
+        self.content_type = 'application/ld+json'
+        #Don't trust e.g. non creative work schema.org
+        trusted = True
         ext_meta = None
         if self.source_metadata:
-            self.source_name = self.getEnumSourceNames().SCHEMAORG_EMBED.value
+            if not self.source_name:
+                self.source_name = self.getEnumSourceNames().SCHEMAORG_EMBED.value
             # in case two or more JSON-LD strings are embedded
             if len(self.source_metadata) > 1:
-
-                self.logger.info('FsF-F2-01M : Found more than one JSON-LD embedded in landing page try to identify CreativeWork type')
+                self.logger.info('FsF-F2-01M : Found more than one JSON-LD embedded in landing page try to identify Dataset or CreativeWork type')
                 for meta_rec in self.source_metadata:
-                    if meta_rec.get('@type') in self.SCHEMA_ORG_CREATIVEWORKS:
+                    if str(meta_rec.get('@type')).lower() in ['dataset']:
+                        ext_meta = meta_rec
+                        break
+                    if str(meta_rec.get('@type')).lower() in self.SCHEMA_ORG_CREATIVEWORKS:
                         ext_meta = meta_rec
 
             if not ext_meta:
@@ -141,8 +152,10 @@ class MetaDataCollectorSchemaOrg(MetaDataCollector):
             requestHelper: RequestHelper = RequestHelper(self.pid_url, self.logger)
             requestHelper.setAcceptType(AcceptTypes.schemaorg)
             neg_source, ext_meta = requestHelper.content_negotiate('FsF-F2-01M')
+        retry = False
         if isinstance(ext_meta, dict):
-            self.getNamespacesfromIRIs(ext_meta)
+
+            #only works with str or lst self.setLinkedNamespaces(ext_meta)
             self.logger.info('FsF-F2-01M : Trying to extract schema.org JSON-LD metadata from -: {}'.format(
                 self.source_name))
             # TODO check syntax - not ending with /, type and @type
@@ -164,25 +177,32 @@ class MetaDataCollectorSchemaOrg(MetaDataCollector):
                     #special case #2
                     if ext_meta.get('@graph'):
                         self.logger.info('FsF-F2-01M : Seems to be a JSON-LD graph, trying to compact')
-                        ext_meta = self.compact_jsonld(ext_meta)
+                        retry = True
+                        #ext_meta = self.compact_jsonld(ext_meta)
+
+                    if isinstance(ext_meta.get('@type'), list):
+                        ext_meta['@type'] = ext_meta.get('@type')[0]
+
                     if not ext_meta.get('@type'):
                         self.logger.info(
-                            'FsF-F2-01M : Found JSON-LD but seems to be a schema.org object but has no context type')
+                            'FsF-F2-01M : Found JSON-LD which seems to be a schema.org object but has no context type')
 
                     elif str(ext_meta.get('@type')).lower() not in self.SCHEMA_ORG_CONTEXT:
+                        trusted = False
                         self.logger.info(
-                            'FsF-F2-01M : Found JSON-LD but seems not to be a schema.org object based on the given context type -:'
+                            'FsF-F2-01M : Found JSON-LD but will not use it since it seems not to be a schema.org object based on the given context type -:'
                             + str(ext_meta.get('@type')))
-                    elif ext_meta.get('@type') not in self.SCHEMA_ORG_CREATIVEWORKS:
+                    elif str(ext_meta.get('@type')).lower() not in self.SCHEMA_ORG_CREATIVEWORKS:
+                        trusted = False
                         self.logger.info(
-                            'FsF-F2-01M : Found schema.org JSON-LD but seems not to be a research data object')
+                            'FsF-F2-01M : Found schema.org JSON-LD but will not use it since it seems not to be a CreativeWork like research data object -:'+str(ext_meta.get('@type')))
                     else:
                         self.logger.info(
                             'FsF-F2-01M : Found schema.org JSON-LD which seems to be valid, based on the given context type -:'
                             + str(ext_meta.get('@type')))
 
                         self.namespaces.append('http://schema.org/')
-                    jsnld_metadata = jmespath.search(self.metadata_mapping.value, ext_meta)
+                        jsnld_metadata = jmespath.search(self.metadata_mapping.value, ext_meta)
                     # TODO all properties with null values extracted through jmespath should be excluded
                     if jsnld_metadata.get('creator') is None:
                         #TODO: handle None values for first and last name
@@ -243,12 +263,14 @@ class MetaDataCollectorSchemaOrg(MetaDataCollector):
                         #jsnld_metadata['object_size'] = str(jsnld_metadata['object_size'].get('value')) + ' '+ jsnld_metadata['object_size'].get('unitText')
 
                 else:
-                    self.logger.info('FsF-F2-01M : Found JSON-LD schema.org but record is not of type "Dataset"')
+                    self.logger.info('FsF-F2-01M : Found JSON-LD but record is not of type schema.org based on context -: '+str(ext_meta.get('@context')))
 
             except Exception as err:
                 #print(err.with_traceback())
                 self.logger.info('FsF-F2-01M : Failed to parse JSON-LD schema.org -: {}'.format(err))
         else:
-            self.logger.info('FsF-F2-01M : Could not identify JSON-LD schema.org metadata')
+            self.logger.info('FsF-F2-01M : Could not identify JSON-LD schema.org metadata from ingested JSON dict')
 
+        if not trusted:
+            jsnld_metadata = {}
         return self.source_name, jsnld_metadata

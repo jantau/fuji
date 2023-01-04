@@ -58,6 +58,11 @@ class FAIREvaluatorRelatedResources(FAIREvaluator):
             self.fuji.related_resources = [
                 item for item in self.fuji.related_resources if item.get('related_resource') != self.fuji.pid_url
             ]
+            #uniquify
+            try:
+                self.fuji.related_resources = [dict(ry) for ry in set(tuple(rx.items()) for rx in self.fuji.related_resources)]
+            except:
+                pass
 
             self.logger.log(
                 self.fuji.LOG_SUCCESS,
@@ -66,6 +71,8 @@ class FAIREvaluatorRelatedResources(FAIREvaluator):
 
         if self.fuji.related_resources:  # TODO include source of relation
             for relation in self.fuji.related_resources:
+                if isinstance(relation.get('related_resource'), list):
+                    relation['related_resource'] = relation.get('related_resource')[0]
                 relation_identifier = IdentifierHelper(relation.get('related_resource'))
                 if relation_identifier.is_persistent or 'url' in relation_identifier.identifier_schemes:
                     pid_used = True
